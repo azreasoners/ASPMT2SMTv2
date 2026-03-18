@@ -1,0 +1,70 @@
+% ──────────────────────────────────────────────────────────────────────────
+% car.aspmt   —  Car planning domain
+%
+% From: "System aspmt2smt: Computing ASPMT Theories by SMT Solvers"
+%        Bartholomew & Lee, JELIA 2014  (Section 5, running example)
+%
+% A car on a road of length l.
+%   - If the accelerator is active:  speed increases by ar * duration
+%   - If the brake is active:        speed decreases by ar * duration
+%   - Otherwise:                     speed remains constant
+%   - Position changes by the average speed * duration
+%
+% Goal: start at rest (speed=0, pos=0) at step 0;
+%       arrive at rest (speed=0, pos=l) at step st.
+%
+% Usage:
+%   python aspmt2smt.py examples/car.aspmt -c st=3 -c ar=3 -c ms=4 -c l=10
+% ──────────────────────────────────────────────────────────────────────────
+
+:- sorts
+   step; astep.
+
+:- objects
+   0..st     :: step;
+   0..st-1   :: astep.
+
+:- constants
+   speed(step)     :: real[0..ms];
+   accel(astep)    :: boolean;
+   decel(astep)    :: boolean;
+   duration(astep) :: real[0..ms];
+   pos(step)       :: real[0..l].
+
+:- variables
+   S       :: astep;
+   X, Y, V :: real;
+   D       :: real.
+
+% ── Exogenous (freely chosen) actions ─────────────────────────────────────
+{accel(S)=true}.
+{decel(S)=true}.
+{duration(S)=D}.
+
+% ── Speed dynamics ─────────────────────────────────────────────────────────
+% Accelerate
+speed(S+1)=Y <- accel(S)=true & speed(S)=X & duration(S)=D & Y = X+ar*D.
+% Decelerate
+speed(S+1)=Y <- decel(S)=true & speed(S)=X & duration(S)=D & Y = X-ar*D.
+% Coast (inertia)
+speed(S+1)=Y <- not accel(S)=true & not decel(S)=true & speed(S)=Y.
+
+% ── Position dynamics ──────────────────────────────────────────────────────
+pos(S+1)=Y <- speed(S)=X & speed(S+1)=V & duration(S)=D & Y = pos(S)+(X+V)/2*D.
+
+% ── Mutual exclusion: cannot accelerate and decelerate simultaneously ──────
+<- accel(S)=true & decel(S)=true.
+
+% ── Duration must be non-negative ──────────────────────────────────────────
+<- not duration(S) >= 0.
+
+% ── Initial conditions ─────────────────────────────────────────────────────
+<- not speed(0)=0.
+<- not pos(0)=0.
+
+% ── Goal conditions ────────────────────────────────────────────────────────
+<- not speed(st)=0.
+<- not pos(st)=l.
+
+:- show
+   speed/1; pos/1; accel/1; decel/1; duration/1.

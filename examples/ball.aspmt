@@ -1,0 +1,86 @@
+% ──────────────────────────────────────────────────────────────────────────
+% ball.aspmt   —  Bouncing ball domain
+%
+% From: "System aspmt2smt: Computing ASPMT Theories by SMT Solvers"
+%        Bartholomew & Lee, JELIA 2014  (Section 6 experiments)
+%
+% A ball is held at height h0, then dropped.  Newton's law governs height.
+% When the ball hits the ground it bounces with rebound coefficient r.
+%
+% Actions:  drop(step)  —  drop the ball at this step
+%           catch(step) —  catch the ball at this step
+%
+% Usage:
+%   python aspmt2smt.py examples/ball.aspmt -c st=4 -c g=9.8 -c r=95 -c h0=10
+%   (r is given as integer percentage, e.g. 95 means rebound ratio 0.95)
+% ──────────────────────────────────────────────────────────────────────────
+
+:- sorts
+   step; astep.
+
+:- objects
+   0..st     :: step;
+   0..st-1   :: astep.
+
+:- constants
+   height(step)    :: real[0..h0];
+   vel(step)       :: real;
+   drop_a(astep)   :: boolean;
+   catch_a(astep)  :: boolean;
+   held(step)      :: boolean;
+   duration(astep) :: real[0..100].
+
+:- variables
+   S       :: astep;
+   H, V, Y :: real;
+   D       :: real.
+
+% ── Exogenous actions ──────────────────────────────────────────────────────
+{drop_a(S)=true}.
+{catch_a(S)=true}.
+{duration(S)=D}.
+
+% ── Ball held: height and velocity remain at h0 and 0 ─────────────────────
+height(S+1)=Y <- held(S)=true & not drop_a(S)=true & height(S)=Y.
+vel(S+1)=Y    <- held(S)=true & not drop_a(S)=true & vel(S)=Y.
+held(S+1)=Y   <- held(S)=true & not drop_a(S)=true & Y=true.
+
+% ── Drop action: ball starts falling ──────────────────────────────────────
+held(S+1)=Y   <- drop_a(S)=true & Y=false.
+
+% ── Free fall: height by Newton's law, velocity increases ─────────────────
+% h(t+D) = h(t) + v(t)*D - 0.5*g*D^2
+% v(t+D) = v(t) - g*D
+height(S+1)=Y <- held(S)=false & not catch_a(S)=true
+               & height(S)=H & vel(S)=V & duration(S)=D
+               & Y = H + V*D - g/2*D*D.
+vel(S+1)=Y    <- held(S)=false & not catch_a(S)=true
+               & vel(S)=V & duration(S)=D
+               & Y = V - g*D.
+
+% ── Bounce: when height becomes 0, velocity reverses with factor r/100 ────
+% Simplified: if height(S+1) would go negative, bounce at ground
+height(S+1)=Y <- held(S)=false & height(S)=H & vel(S)=V & duration(S)=D
+               & H + V*D - g/2*D*D <= 0
+               & Y = 0.
+vel(S+1)=Y    <- held(S)=false & vel(S)=V & height(S+1)=0
+               & Y = -(r/100)*V.
+
+% ── Catch action ───────────────────────────────────────────────────────────
+held(S+1)=Y   <- catch_a(S)=true & Y=true.
+height(S+1)=Y <- catch_a(S)=true & height(S)=Y.
+vel(S+1)=Y    <- catch_a(S)=true & Y=0.
+
+% ── Cannot drop and catch simultaneously ──────────────────────────────────
+<- drop_a(S)=true & catch_a(S)=true.
+
+% ── Duration must be positive ──────────────────────────────────────────────
+<- not duration(S) >= 0.
+
+% ── Initial conditions ─────────────────────────────────────────────────────
+<- not height(0)=h0.
+<- not vel(0)=0.
+<- not held(0)=true.
+
+:- show
+   height/1; vel/1; held/1; drop_a/1; catch_a/1; duration/1.
