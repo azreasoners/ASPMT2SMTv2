@@ -188,6 +188,8 @@ def expr_to_smt(e, gc: Dict, params: Dict) -> str:
         return n   # leave unknown names as-is (should not happen after grounding)
     if t == 'app':
         fname, args = e[1], e[2]
+        if fname in ('true', 'false') and len(args) == 0:
+            return fname
         try:
             gargs = tuple(int(expr_eval(a, params)) for a in args)
             key = (fname, gargs)
@@ -954,7 +956,7 @@ def compute_completion(ground_rules: List[dict],
             # Choice rules → constant is exogenous (unconstrained), skip completion
             continue
 
-        completion[fa].append(rule['body'])
+        completion[fa].append((rule['body'], rule['head']['rhs']))
 
     return completion, constraints, exogenous
 
@@ -1037,9 +1039,9 @@ def emit_smt(
         smt_head = gc.get((fname, args), smt_var_name(fname, args))
         # Each body_list[i] is a list of atoms for one rule
         branch_smts: List[str] = []
-        for body_atoms in body_list:
+        for body_atoms, head_rhs in body_list:
             branch = _emit_body(body_atoms, smt_head, fname, args,
-                                prog, gc, params)
+                                prog, gc, params, head_rhs)
             if branch:
                 branch_smts.append(branch)
         if not branch_smts:
@@ -1074,7 +1076,8 @@ def _emit_body(
     head_args: Tuple,
     prog: Program,
     gc: Dict[Tuple, str],
-    params: Dict
+    params: Dict,
+    head_rhs=None
 ) -> str:
     """Convert one rule body to an SMT-LIB conjunct for the completion.
 
@@ -1208,51 +1211,19 @@ def _emit_body(
     # Even simpler:  after the substitution, there should be exactly one
     # "residual" equality of the form (= smt_head expr).  We emit it.
 
-    # Find the arith-bound vars (from arith_eqs that were resolved)
-    const_bound_vars: Set[str] = set()
-    for atom in body_atoms:
-        fa3 = atom_is_func_assignment(atom, prog.const_decls)
-        if fa3 and not atom['negated']:
-            rhs2 = atom['rhs']
-            if rhs2[0] == 'var' and rhs2[1][0].isupper():
-                const_bound_vars.add(rhs2[1])
-
-    arith_bound_vars = {k for k in bindings if k not in const_bound_vars}
-
-    for vn in arith_bound_vars:
-        # This var was resolved from an arith equality; its value is the
-        # head value.
-        head_val_smt = bindings[vn]
-        if isinstance(head_val_smt, str):
-            parts.append(f'(= {smt_head} {head_val_smt})')
-        break    # typically only one value variable per rule
-
-    # Edge case: inertia-style rule  speed(n+1) = Y <- not ... & speed(n)=Y
-    # Here Y is both bound by speed(n)=Y AND is the head value variable.
-    # The completion should give  (= speed_{n+1}_ speed_{n}_).
-    # We handle this: if smt_head equality wasn't added yet, check if
-    # a const-bound var also matches what the head should be.
-    if not arith_bound_vars:
-        # All vars are const-bound; find any var that should map to head
-        for atom in body_atoms:
-            fa4 = atom_is_func_assignment(atom, prog.const_decls)
-            if fa4:
-                g_smt2 = gc.get(fa4, smt_var_name(fa4[0], fa4[1]))
-                rhs3 = atom['rhs']
-                if rhs3[0] == 'var' and rhs3[1][0].isupper():
-                    vn = rhs3[1]
-                    # Is this var also the head value var?
-                    # Heuristic: if this var doesn't appear in any condition
-                    # atom's lhs (non-func-app atoms), it's the value var.
-                    used_in_cond = False
-                    for ca in conditions:
-                        if vn in expr_vars(ca['lhs']) or vn in expr_vars(ca['rhs']):
-                            used_in_cond = True
-                            break
-                    if not used_in_cond:
-                        # This binding variable IS the head value variable
-                        parts.append(f'(= {smt_head} {g_smt2})')
-                        break
+    # 4. Build head value equality from head_rhs
+    if head_rhs is not None:
+        if head_rhs[0] == 'var' and head_rhs[1][0].isupper():
+            # Head value is an SMT variable — look it up in bindings
+            vn = head_rhs[1]
+            if vn in bindings:
+                head_val_smt = bindings[vn]
+                if isinstance(head_val_smt, str):
+                    parts.append(f'(= {smt_head} {head_val_smt})')
+        else:
+            # Concrete head value (number, true, false, etc.)
+            val_str = _expr_to_smt_str(head_rhs, gc, params, bindings)
+            parts.append(f'(= {smt_head} {val_str})')
 
     if not parts:
         return 'true'
@@ -1331,6 +1302,9 @@ def _expr_to_smt_str(e, gc: Dict, params: Dict, bindings: Dict) -> str:
                 return str(v)
             return n
         if t == 'app':
+            fname_app, args_app = expr[1], expr[2]
+            if fname_app in ('true', 'false') and len(args_app) == 0:
+                return fname_app
             fa = extract_func_app(expr)
             if fa and fa in gc:
                 return gc[fa]
